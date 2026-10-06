@@ -5,14 +5,30 @@ import {RoomEnvironment} from 'three/examples/jsm/environments/RoomEnvironment.j
 import {createExplosionLayout} from './explosion-layout';
 import {PointerTap} from './pointer-tap';
 import {SYSTEMS,type SceneState,type SystemId} from './anatomy';
-import {partPickGeometry,shareGeometry,type DecodedFile} from './data/geometry';
+import type {DecodedFile} from './data/geometry';
 import type {Manifest} from './data/manifest';
 import {SystemStreamer} from './data/streamer';
 import {hideSplash} from './splash';
 import {createStage} from './render/stage';
-interface Props {manifest:Manifest;state:SceneState;onSelect:(id:string)=>void;onProgress:(n:number)=>void;onError:(s:string)=>void}
-export default function AnatomyScene({manifest,state,onSelect,onProgress,onError}:Props){
+import {createPartNormalMaterial,createSystemMaterial,type PartStateUniforms} from './render/materials';
+import {createPost} from './render/post';
+import {Residency} from './render/residency';
+import {detectDeviceTier,type DeviceTier} from './render/device-tier';
+
+/** Standard tier: camera distance (m) below which nearby parts load at source resolution. */
+const CLOSE_UP_DISTANCE=0.9;
+/** Standard tier: source-resolution triangles allowed for close-ups at any one time. */
+const CLOSE_UP_TRIANGLES=1_200_000;
+/** Rendering statistics, reported every half second when the benchmark panel is open. */
+export interface SceneStats {tier:DeviceTier;fps:number;residentTriangles:number;drawnTriangles:number;drawCalls:number;files:number}
+interface Props {manifest:Manifest;state:SceneState;onSelect:(id:string)=>void;onProgress:(n:number)=>void;onError:(s:string)=>void;
+ /** Forces a device tier (benchmark panel); undefined uses detection. */
+ detailTier?:DeviceTier;
+ /** Benchmark mode: render continuously and report statistics. */
+ onStats?:(stats:SceneStats)=>void}
+export default function AnatomyScene({manifest,state,onSelect,onProgress,onError,detailTier,onStats}:Props){
  const host=useRef<HTMLDivElement>(null),latest=useRef(state),select=useRef(onSelect),progress=useRef(onProgress),fail=useRef(onError);
+ const latestTier=useRef(detailTier),stats=useRef(onStats);latestTier.current=detailTier;stats.current=onStats;
  latest.current=state;select.current=onSelect;progress.current=onProgress;fail.current=onError;
  useEffect(()=>{
   // The scene reads `atlas.parts` throughout; the manifest has the same part records.
@@ -52,39 +68,21 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
    return best;
   };
   // Per-part GPU state. partState (float RGBA): explode offset xyz, visible w.
-  // selectionState (byte RGBA): R selected, G full detail loaded (hides the low-detail copy).
-  // lod: 0 for the low-detail body, 1 for full detail; materials are cached per system and lod.
-  const materialFor=(system:string,lod:0|1)=>{
-   const m=new T.MeshStandardMaterial({color:SYSTEMS.find(s=>s.id===system)?.color??'#aebbb8',metalness:.08,roughness:.53,side:T.DoubleSide,transparent:system==='integumentary',opacity:system==='integumentary'?.1:1,depthWrite:system!=='integumentary'});
-   m.onBeforeCompile=shader=>{
-    shader.uniforms.partState={value:partTexture};shader.uniforms.selectionState={value:selectionTexture};shader.uniforms.stateWidth={value:width};shader.uniforms.meshLod={value:lod};
-    shader.vertexShader='attribute float partIndex; uniform sampler2D partState; uniform sampler2D selectionState; uniform float stateWidth; uniform float meshLod; varying float partSelected;\n'+shader.vertexShader;
-    shader.vertexShader=shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nvec2 stateUv = vec2((partIndex + 0.5) / stateWidth, 0.5); vec4 state = texture2D(partState, stateUv); vec4 flags = texture2D(selectionState, stateUv); transformed += state.xyz; partSelected = flags.r;\n// Hidden parts, and low-detail copies of parts already in full detail, are culled here.\nbool partHidden = state.w < 0.5 || (meshLod < 0.5 && flags.g > 0.5);');
-    // Moving every vertex of a hidden part outside the clip volume skips rasterisation entirely.
-    shader.vertexShader=shader.vertexShader.replace('#include <project_vertex>','#include <project_vertex>\nif (partHidden) gl_Position = vec4(0.0, 0.0, 2.0, 1.0);');
-    shader.fragmentShader='varying float partSelected;\n'+shader.fragmentShader;
-    shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>','#include <color_fragment>\ndiffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.85, 0.78), partSelected * 0.75);');
-   };materials.push(m);return m;
-  };
-  const mats=new Map(SYSTEMS.flatMap(s=>([0,1] as const).map(lod=>[`${s.id}:${lod}`,materialFor(s.id,lod)])));
-  // Adds a decoded file to the scene: one draw call per system range, plus per-part pick meshes.
-  const addFile=({file,geometry}:DecodedFile)=>{
-   geometries.push(geometry);
-   const ranges:[string,number,number][]=file.lod===0?Object.entries(file.systems??{}).map(([s,r])=>[s,r[0],r[1]]):[[file.system,0,file.indexCount]];
-   for(const [system,start,count] of ranges){
-    const g=file.lod===0?shareGeometry(geometry,start,count):geometry;if(g!==geometry)geometries.push(g);
-    const mesh=new T.Mesh(g,mats.get(`${system}:${file.lod}`));mesh.frustumCulled=false;mesh.name=`${system}:lod${file.lod}`;scene.add(mesh);
-   }
-   for(const [i,start,count] of file.parts){
-    const g=partPickGeometry(geometry,start,count,bounds[i]);geometries.push(g);
-    const pick=new T.Mesh(g);pick.matrixAutoUpdate=false;pick.position.set(data[i*4],data[i*4+1],data[i*4+2]);pick.updateMatrix();pick.updateMatrixWorld(true);pickers[i]=pick;
-    if(file.lod===1)selectedData[i*4+1]=255;
-   }
-   selectionTexture.needsUpdate=true;dirty=true;
-  };
+  // selectionState (byte RGBA): R selected, G best resident detail level (see app/render/materials.ts).
+  const stateUniforms:PartStateUniforms={partState:{value:partTexture},selectionState:{value:selectionTexture},stateWidth:{value:width}};
+  const mats=new Map(SYSTEMS.map(s=>{const m=createSystemMaterial(s,stateUniforms);materials.push(m);return [s.id,m as T.Material];}));
+  const normalMaterial=createPartNormalMaterial(stateUniforms);materials.push(normalMaterial);
+  // Ambient occlusion via post-processing. Phones render directly until the quality setting (Phase 3) exists.
+  const post=createPost(renderer,scene,camera,normalMaterial);post.enabled=!matchMedia('(pointer: coarse)').matches;
+  // Which files are in the scene, the best level per part and the pick meshes (app/render/residency.ts).
+  const residency=new Residency(scene,mats,bounds,pickers,selectedData,selectionTexture,i=>[data[i*4],data[i*4+1],data[i*4+2]]);
+  const addFile=(decoded:DecodedFile)=>{residency.add(decoded);dirty=true;};
+  // How much of the body this device holds at source resolution (app/render/device-tier.ts).
+  let tier:DeviceTier=latestTier.current??detectDeviceTier(renderer);
   let firstBody=false,fullDetail=false;
-  const streamer=new SystemStreamer(manifest,{
+  const streamer=new SystemStreamer(manifest,tier,{
    onFile:addFile,
+   onRelease:file=>{residency.remove(file);dirty=true;},
    onProgress:(loadedBytes,total)=>{
     onProgress(total?Math.round(loadedBytes/total*100):100);
     if(firstBody&&loadedBytes===total&&!fullDetail){fullDetail=true;performance.mark('anima:full-detail');}
@@ -100,7 +98,26 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
   const compiled=renderer.compileAsync(scene,camera).catch(()=>{/* Falls back to compiling on first render. */}).finally(()=>{scene.remove(warm);warmGeometry.dispose();});
   Promise.all([streamer.loadLowDetail(),compiled]).then(([decoded])=>{if(disposed)return;addFile(decoded);ready=true;lastState=null;dirty=true;wantSystems(latest.current);}).catch(e=>{if(!disposed&&e?.name!=='AbortError')onError(e instanceof Error?e.message:'Could not load the anatomy.');});
   // Full detail is fetched only for systems that are visible or contain a selection.
-  const wantSystems=(s:SceneState)=>{const wanted=new Set<SystemId>(s.isolate?[]:s.visible);for(const id of s.selected){const p=atlas.parts.find(x=>x.id===id);if(p)wanted.add(p.system);}streamer.want(wanted);};
+  // Close-ups (standard tier): the focused structure, and what is near the centre of view when
+  // the camera is close, are loaded at source resolution within a triangle budget.
+  const indexOf=new Map(atlas.parts.map((p,i)=>[p.id,i])),fullTriangles=new Float32Array(atlas.parts.length);
+  for(const f of manifest.files)if(f.level===2)for(const [i,,count] of f.parts)fullTriangles[i]=count/3;
+  const frustum=new T.Frustum(),viewProjection=new T.Matrix4(),partBox=new T.Box3();
+  const closeUpParts=(s:SceneState)=>{
+   const chosen:number[]=[];let budget=CLOSE_UP_TRIANGLES;
+   const take=(i:number)=>{if(budget<=0)return;chosen.push(i);budget-=fullTriangles[i];};
+   if(s.isolate)for(const id of s.selected){const i=indexOf.get(id);if(i!==undefined)take(i);}
+   if(!s.isolate&&amount<.1&&camera.position.distanceTo(controls.target)<CLOSE_UP_DISTANCE){
+    camera.updateMatrixWorld();viewProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);frustum.setFromProjectionMatrix(viewProjection);
+    const near:[number,number][]=[];
+    atlas.parts.forEach((p,i)=>{if(data[i*4+3]<.5||p.system==='integumentary')return;partBox.copy(bounds[i]);if(frustum.intersectsBox(partBox))near.push([i,partBox.distanceToPoint(controls.target)]);});
+    near.sort((a,b)=>a[1]-b[1]).forEach(([i])=>take(i));
+   }
+   return chosen;
+  };
+  const wantSystems=(s:SceneState)=>{const wanted=new Set<SystemId>(s.isolate?[]:s.visible);for(const id of s.selected){const p=atlas.parts[indexOf.get(id)??-1];if(p)wanted.add(p.system);}streamer.want({systems:wanted,closeUp:closeUpParts(s)});};
+  // Re-evaluate close-ups shortly after the camera stops moving.
+  let closeUpTimer=0;controls.addEventListener('change',()=>{clearTimeout(closeUpTimer);closeUpTimer=window.setTimeout(()=>{if(ready&&!disposed&&tier==='standard')wantSystems(latest.current);},350);});
   const fit=(view:string,extent=0)=>{
    const aspect=camera.aspect,mobile=el.clientWidth<768,normalDistance=mobile?Math.max(4.5,1.8*el.clientHeight/Math.max(160,el.clientHeight-350)/(2*Math.tan(T.MathUtils.degToRad(camera.fov/2)))):4;
    const reservedHeight=mobile?350:270;const availableAspect=Math.max(.35,(el.clientWidth-(mobile?40:340))/Math.max(160,el.clientHeight-reservedHeight));const atlasDistance=Math.max(packingHeight,packingWidth/availableAspect)/(2*Math.tan(T.MathUtils.degToRad(camera.fov/2)))*(el.clientHeight/Math.max(160,el.clientHeight-reservedHeight))*1.08;
@@ -108,7 +125,7 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
    const direction=view==='front'?new T.Vector3(0,.02,1):view==='back'?new T.Vector3(0,.02,-1):view==='side'?new T.Vector3(1,.02,0):new T.Vector3(.35,.06,1).normalize();
    controls.target.set(extent>.1&&el.clientWidth>767?-packingWidth*.12:0,extent>.1||mobile?.85:.68,0);camera.position.copy(controls.target).addScaledVector(direction,distance);controls.update();dirty=true;
   };
-  const resize=()=>{layoutKey='';lastState=null;renderer.setPixelRatio(Math.min(devicePixelRatio,el.clientWidth<768||el.clientHeight<600?1.5:2));camera.aspect=el.clientWidth/el.clientHeight;camera.updateProjectionMatrix();renderer.setSize(el.clientWidth,el.clientHeight);fit(latest.current.view,amount);};const observer=new ResizeObserver(resize);observer.observe(el);
+  const resize=()=>{layoutKey='';lastState=null;renderer.setPixelRatio(Math.min(devicePixelRatio,el.clientWidth<768||el.clientHeight<600?1.5:2));camera.aspect=el.clientWidth/el.clientHeight;camera.updateProjectionMatrix();renderer.setSize(el.clientWidth,el.clientHeight);post.setSize(el.clientWidth,el.clientHeight,renderer.getPixelRatio());fit(latest.current.view,amount);};const observer=new ResizeObserver(resize);observer.observe(el);
   const raycaster=new T.Raycaster(),pointer=new T.Vector2(),tap=new PointerTap(),worldBox=new T.Box3(),hitPoint=new T.Vector3();
   const down=(e:PointerEvent)=>{hover.hidden=true;tap.down(e.pointerId,e.clientX,e.clientY,e.pointerType==='touch'?12:5);};
   const move=(e:PointerEvent)=>{tap.move(e.pointerId,e.clientX,e.clientY);if(e.buttons||amount<.5||e.pointerType==='touch'){hover.hidden=true;return;}const rect=el.getBoundingClientRect(),x=e.clientX-rect.left,y=e.clientY-rect.top,index=findTarget(x,y,12);hover.hidden=index<0;renderer.domElement.style.cursor=index<0?'grab':'pointer';if(index>=0){hover.textContent=atlas.parts[index].name;hover.style.left=`${Math.max(8,Math.min(x+14,el.clientWidth-260))}px`;hover.style.top=`${Math.max(8,Math.min(y+18,el.clientHeight-55))}px`;}};
@@ -120,7 +137,9 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
    if(found<0&&amount>.45)found=findTarget(e.clientX-rect.left,e.clientY-rect.top,e.pointerType==='touch'?24:16);if(found>=0){hover.hidden=true;select.current(atlas.parts[found].id);}
   };
   renderer.domElement.addEventListener('pointerdown',down);renderer.domElement.addEventListener('pointermove',move);renderer.domElement.addEventListener('pointerup',up);renderer.domElement.addEventListener('pointercancel',cancel);
-  const clock=new T.Clock();let lastExtent=-1;
+  const clock=new T.Clock();let lastExtent=-1,sampleStart=performance.now(),sampleFrames=0;
+  // Counters cover every pass of a frame (scene and ambient occlusion), reset once per frame.
+  renderer.info.autoReset=false;
   const animate=()=>{
    // Rendering stops entirely while the tab is hidden; see onVisibility below.
    if(disposed||document.hidden)return;frame=requestAnimationFrame(animate);const dt=Math.min(clock.getDelta(),.05),s=latest.current;
@@ -138,7 +157,7 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
      const c=centers[i],destination=offsets[i];let dx=0,dy=0,dz=0;
      if(amount<=.45){const t=amount/.45;const group=SYSTEMS.findIndex(sys=>sys.id===p.system);const angle=group/SYSTEMS.length*Math.PI*2;dx=Math.sin(angle)*t*.48;dy=(c.y-.85)*t*.28;dz=Math.cos(angle)*t*.48;}
      else {const t=(amount-.45)/.55,group=SYSTEMS.findIndex(sys=>sys.id===p.system),angle=group/SYSTEMS.length*Math.PI*2;dx=T.MathUtils.lerp(Math.sin(angle)*.48,destination.x-c.x,t);dy=T.MathUtils.lerp((c.y-.85)*.28,destination.y-c.y,t);dz=T.MathUtils.lerp(Math.cos(angle)*.48,-c.z,t);}
-     const selected=selection.has(p.id);data.set([dx,dy,dz,(s.isolate?selected:visible.has(p.system)||selected)?1:0],i*4);selectedData[i*4]=selected?255:0;
+     const selected=selection.has(p.id);data.set([dx,dy,dz,(s.isolate?selected:visible.has(p.system)||selected)?1:0],i*4);selectedData[i*4]=selected&&!s.isolate?255:0;
      markerPositions.set(data[i*4+3]>.5?[c.x+dx,c.y+dy,c.z+dz]:[10000,10000,10000],i*3);const mesh=pickers[i];if(mesh){mesh.position.set(dx,dy,dz);mesh.updateMatrix();mesh.updateMatrixWorld(true);}
     });partTexture.needsUpdate=true;selectionTexture.needsUpdate=true;markerGeometry.attributes.position.needsUpdate=true;lastState=s;lastExtent=amount;dirty=true;
    }
@@ -152,7 +171,9 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
     lastIsolate=isolateKey;
    }
    controls.enableRotate=amount<.8;controls.mouseButtons.LEFT=amount<.8?T.MOUSE.ROTATE:T.MOUSE.PAN;controls.touches.ONE=amount<.8?T.TOUCH.ROTATE:T.TOUCH.PAN;stage.group.visible=amount<.5&&!s.isolate;markers.visible=amount>.75;controls.autoRotate=s.rotate&&!s.isolate&&amount<.4;controls.autoRotateSpeed=.65;controls.update();if(controls.autoRotate)dirty=true;
-   if(dirty){renderer.render(scene,camera);targets=[];if(amount>.45){const hasSolid=atlas.parts.some((p,i)=>p.system!=='integumentary'&&data[i*4+3]>.5);atlas.parts.forEach((p,i)=>{if(data[i*4+3]<.5||(hasSolid&&p.system==='integumentary'))return;let left=Infinity,right=-Infinity,top=Infinity,bottom=-Infinity;for(let corner=0;corner<8;corner++){projected.set(p.bounds[(corner&1)?1:0][0]+data[i*4],p.bounds[(corner&2)?1:0][1]+data[i*4+1],p.bounds[(corner&4)?1:0][2]+data[i*4+2]).project(camera);const x=(projected.x+1)*el.clientWidth/2,y=(1-projected.y)*el.clientHeight/2;left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}projected.copy(centers[i]).add(new T.Vector3(data[i*4],data[i*4+1],data[i*4+2])).project(camera);if(projected.z< -1||projected.z>1)return;targets.push({index:i,x:(projected.x+1)*el.clientWidth/2,y:(1-projected.y)*el.clientHeight/2,left,right,top,bottom});});}dirty=false;}
+   if(latestTier.current&&latestTier.current!==tier){tier=latestTier.current;streamer.setTier(tier);fullDetail=false;}
+   if(stats.current){dirty=true;sampleFrames++;const now=performance.now();if(now-sampleStart>=500){stats.current({tier,fps:Math.round(sampleFrames*1000/(now-sampleStart)),residentTriangles:residency.stats().triangles,drawnTriangles:renderer.info.render.triangles,drawCalls:renderer.info.render.calls,files:residency.stats().files});sampleStart=now;sampleFrames=0;}}
+   if(dirty){renderer.info.reset();post.render();targets=[];if(amount>.45){const hasSolid=atlas.parts.some((p,i)=>p.system!=='integumentary'&&data[i*4+3]>.5);atlas.parts.forEach((p,i)=>{if(data[i*4+3]<.5||(hasSolid&&p.system==='integumentary'))return;let left=Infinity,right=-Infinity,top=Infinity,bottom=-Infinity;for(let corner=0;corner<8;corner++){projected.set(p.bounds[(corner&1)?1:0][0]+data[i*4],p.bounds[(corner&2)?1:0][1]+data[i*4+1],p.bounds[(corner&4)?1:0][2]+data[i*4+2]).project(camera);const x=(projected.x+1)*el.clientWidth/2,y=(1-projected.y)*el.clientHeight/2;left=Math.min(left,x);right=Math.max(right,x);top=Math.min(top,y);bottom=Math.max(bottom,y);}projected.copy(centers[i]).add(new T.Vector3(data[i*4],data[i*4+1],data[i*4+2])).project(camera);if(projected.z< -1||projected.z>1)return;targets.push({index:i,x:(projected.x+1)*el.clientWidth/2,y:(1-projected.y)*el.clientHeight/2,left,right,top,bottom});});}dirty=false;}
 
    // First frame that shows the low-detail body: record the timing and remove the splash screen.
    if(ready&&!firstBody){firstBody=true;performance.mark('anima:first-body');hideSplash();}
@@ -160,7 +181,7 @@ export default function AnatomyScene({manifest,state,onSelect,onProgress,onError
   const onVisibility=()=>{if(!document.hidden&&!disposed){cancelAnimationFrame(frame);clock.getDelta();dirty=true;animate();}};
   document.addEventListener('visibilitychange',onVisibility);
   const contextLost=(e:Event)=>{e.preventDefault();onError('The 3D session was paused by your device. Reload to continue.');};renderer.domElement.addEventListener('webglcontextlost',contextLost);
-  return()=>{disposed=true;streamer.dispose();document.removeEventListener('visibilitychange',onVisibility);cancelAnimationFrame(frame);observer.disconnect();controls.dispose();geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());scene.traverse(o=>{if(o instanceof T.Mesh&&!geometries.includes(o.geometry)){o.geometry.dispose();const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>m.dispose());}});env.dispose();stage.dispose();partTexture.dispose();selectionTexture.dispose();markerGeometry.dispose();markerMaterial.dispose();hover.remove();renderer.dispose();renderer.domElement.remove();};
+  return()=>{disposed=true;clearTimeout(closeUpTimer);streamer.dispose();residency.dispose();document.removeEventListener('visibilitychange',onVisibility);cancelAnimationFrame(frame);observer.disconnect();controls.dispose();geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());scene.traverse(o=>{if(o instanceof T.Mesh&&!geometries.includes(o.geometry)){o.geometry.dispose();const ms=Array.isArray(o.material)?o.material:[o.material];ms.forEach(m=>m.dispose());}});env.dispose();stage.dispose();post.dispose();partTexture.dispose();selectionTexture.dispose();markerGeometry.dispose();markerMaterial.dispose();hover.remove();renderer.dispose();renderer.domElement.remove();};
  },[manifest]);
  return <div className="scene" ref={host}/>;
 }

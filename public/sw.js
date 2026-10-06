@@ -65,7 +65,8 @@ self.addEventListener('message', event => {
       // Built JS/CSS are not listed in the manifest; only prune geometry and data.
       if (new URL(url).pathname.includes('/models/') && !keep.has(url)) await cache.delete(url);
     }
-    for (const url of keep) {
+    // Cache only what the page downloaded (its device tier), not every file in the build.
+    for (const url of new Set((event.data.fetch ?? []).map(u => new URL(u, self.registration.scope).href))) {
       if (cached.has(url)) continue;
       try {
         const response = await fetch(url);

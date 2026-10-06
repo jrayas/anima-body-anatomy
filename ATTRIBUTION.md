@@ -15,9 +15,14 @@ BodyParts3D, © The Database Center for Life Science licensed under CC Attributi
 - English names and relationships: IS-A and PART-OF concept, element, and inclusion tables from the same archive.
 - Publication: Mitsuhashi et al. (2009), BodyParts3D: 3D structure database for anatomical concepts. https://doi.org/10.1093/nar/gkn613
 
-Adaptations (Human Atlas): axes and units converted from millimetres/Z-up to metres/Y-up; translated to rest at the stage; geometry simplified using meshoptimizer with 0.2% relative error limit per structure; normals quantised to signed 16-bit; curated display system groupings and colours.
+Adaptations (from Human Atlas, retained): axes and units converted from millimetres/Z-up to metres/Y-up and translated to rest at the stage; English display names, concept links and curated display-system groupings.
 
-Adaptations (Anima): geometry regrouped into files per anatomical system; positions quantised to a 16-bit grid (0.026 mm step) and normals octahedrally encoded (12-bit for full detail); compressed with meshoptimizer and gzip; an additional heavily simplified low-detail copy of every structure (about 8% of the triangles, up to 10% relative error) is shown briefly while full detail loads. The low-detail copy is a loading placeholder, not a faithful representation of the source. The source contains 2,234 individual OBJ meshes; all remain represented. The combined hierarchy contains 3,432 named FMA concepts, which may reference multiple meshes. Original source identity is preserved in the manifest.
+Adaptations (Anima, built directly from the archive above):
+- Vertices that the source splits along seams are merged, and normals are recalculated from the surface.
+- Light Taubin smoothing (two iterations) is applied to reduce faceting; it is reduced or skipped for any structure whose volume would change by more than 3% (mean change 0.7%). Thin vessels and nerves are therefore smoothed less.
+- Three detail levels: the full source resolution (6.68 million triangles), a simplified standard level (about 1.6 million triangles, 1% error bound) for phones and less powerful computers, and a coarse loading placeholder (about 120,000 triangles) that is shown briefly and is not a faithful representation of the source.
+- Positions are quantised to a 16-bit grid (0.026 mm step), normals are octahedrally encoded, and files are compressed with meshoptimizer and gzip.
+- Colours, surface materials and the fine procedural surface relief are display choices; the relief is a shading effect, not anatomical texture from the source. The source contains 2,234 individual OBJ meshes; all remain represented. The combined hierarchy contains 3,432 named FMA concepts, which may reference multiple meshes. Original source identity is preserved in the manifest.
 
 Source OBJ comments mention an older CC BY-SA 2.1 Japan license. The official current database license linked above supersedes that legacy text and explicitly permits redistribution and adaptation under CC BY 4.0.
 

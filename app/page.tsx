@@ -2,7 +2,9 @@
 // Layout: intro overlay (landing) -> explorer (layers panel, control deck, detail panel).
 import {useEffect, useMemo, useRef, useState} from 'react';
 import {flushSync} from 'react-dom';
-import AnatomyScene from './scene';
+import AnatomyScene, {type SceneStats} from './scene';
+import {BenchPanel} from './interface/bench-panel';
+import {rememberDeviceTier, type DeviceTier} from './render/device-tier';
 import {registerAtlasTools} from './agent-tools';
 import {DEFAULT_VISIBLE, type Atlas, type Concept, type SceneState, type SystemId, type View} from './anatomy';
 import {BRAND, UI, type Tour} from './content';
@@ -18,6 +20,8 @@ import {DetailPanel} from './interface/detail-panel';
 import {AboutPanel} from './interface/about-panel';
 import {ErrorNotice, StreamingStatus} from './interface/status';
 
+/** ?bench opens the benchmark panel (frame rate and detail switch) and skips the intro. */
+const benchMode = typeof location !== 'undefined' && new URLSearchParams(location.search).has('bench');
 const reducedMotion = () => typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 const initial: SceneState = {explode: 0, visible: DEFAULT_VISIBLE, selected: [], isolate: false, view: 'three-quarter', rotate: false, reset: 0};
 
@@ -26,7 +30,9 @@ export default function Home() {
   const [concepts, setConcepts] = useState<Concept[]>([]);
   // The body turns slowly behind the intro, unless the visitor prefers reduced motion.
   const [state, setState] = useState<SceneState>(() => ({...initial, rotate: !reducedMotion()}));
-  const [intro, setIntro] = useState(true);
+  const [intro, setIntro] = useState(!benchMode);
+  const [benchTier, setBenchTier] = useState<DeviceTier | undefined>();
+  const [stats, setStats] = useState<SceneStats | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState('');
   const [panel, setPanel] = useState<'layers' | 'search' | null>(null);
@@ -126,7 +132,8 @@ export default function Home() {
       <div className="stage" onPointerDownCapture={() => { if (intro) enterExplorer(); }}>
         {manifest && <AnatomyScene manifest={manifest} state={{...state, inspectorOpen: details && selectedParts.length > 0}}
           onSelect={choosePart} onProgress={n => { setProgress(n); if (n === 100) setError(''); }}
-          onError={e => { setError(e); splashError(e); }}/>}
+          onError={e => { setError(e); splashError(e); }}
+          detailTier={benchTier} onStats={benchMode ? setStats : undefined}/>}
       </div>
 
       <TopBar searchOpen={panel === 'search'}
@@ -163,6 +170,7 @@ export default function Home() {
         onIsolate={() => setState(s => ({...s, isolate: !s.isolate, explode: 0}))}
         onClear={() => { setState(s => ({...s, selected: [], isolate: false})); setDetails(false); }}/>
       <AboutPanel open={about} onOpenChange={setAbout}/>
+      {benchMode && <BenchPanel stats={stats} onTier={t => { rememberDeviceTier(t); setBenchTier(t); }}/>}
     </main>
   );
 }

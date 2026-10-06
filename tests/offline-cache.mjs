@@ -14,7 +14,7 @@ await page.goto(url);
 await mark('anima:full-detail');
 await page.evaluate(() => navigator.serviceWorker.ready);
 // The first visit asks the worker to cache everything once full detail has loaded.
-await page.waitForFunction(async () => (await (await caches.open('anima-immutable-v1')).keys()).length >= 20 && (await (await caches.open('anima-shell-v1')).keys()).length >= 2, null, {timeout: 30000});
+await page.waitForFunction(async () => (await (await caches.open('anima-immutable-v1')).keys()).length >= 25 && (await (await caches.open('anima-shell-v1')).keys()).length >= 2, null, {timeout: 30000});
 const cached = await page.evaluate(async () => (await (await caches.open('anima-immutable-v1')).keys()).length);
 
 await context.setOffline(true);

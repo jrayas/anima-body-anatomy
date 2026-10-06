@@ -5,12 +5,14 @@ import type {Concept, Part, SystemId} from '../anatomy';
 
 export interface StreamRange {offset: number; length: number}
 
+/** 0 low (placeholder), 1 standard (phones, weak laptops), 2 full (source resolution). */
+export type DetailLevel = 0 | 1 | 2;
+
 export interface GeometryFile {
   url: string;
-  /** Owning system, or 'all' for the low-detail body. */
+  /** Owning system, or 'all' for the level 0 body. */
   system: SystemId | 'all';
-  /** 0 = low-detail body, 1 = full detail. */
-  lod: 0 | 1;
+  level: DetailLevel;
   bytes: number;
   rawBytes: number;
   vertexCount: number;
@@ -20,15 +22,18 @@ export interface GeometryFile {
   streams: {position: StreamRange; normal: StreamRange; index: StreamRange};
   /** [partIndex, indexStart, indexCount] for every part in the file. */
   parts: [number, number, number][];
-  /** Low-detail file only: [indexStart, indexCount] per system. */
+  /** Level 0 file only: [indexStart, indexCount] per system. */
   systems?: Partial<Record<SystemId, [number, number]>>;
 }
 
 export interface Manifest {
-  format: 2;
+  format: 3;
   version: string;
   build: string;
-  triangles: {lod0: number; full: number; source: number};
+  levels: {level: DetailLevel; name: string; triangles: number}[];
+  /** Part indices in the geometry are stored as index + level * levelOffset. */
+  levelOffset: number;
+  sourceTriangles: number;
   quant: {origin: number[]; scale: number};
   concepts: string;
   parts: Part[];
@@ -50,7 +55,7 @@ export async function loadManifest(signal?: AbortSignal): Promise<Manifest> {
   const response = await (early ?? fetch(assetUrl('models/manifest.json'), {signal, cache: 'no-cache'}));
   if (!response.ok) throw new Error('The anatomy catalogue could not be loaded.');
   const manifest = await response.json() as Manifest;
-  if (manifest.format !== 2) throw new Error('The anatomy catalogue is in an unexpected format.');
+  if (manifest.format !== 3) throw new Error('The anatomy catalogue is in an unexpected format. Please reload the page.');
   return manifest;
 }
 

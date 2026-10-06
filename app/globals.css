@@ -391,3 +391,13 @@ kbd { font: 600 10px/1 var(--font); padding: 3px 6px; border-radius: 5px; border
 @media (max-width: 767px) {
   .layers.mobile-open ~ .deck { visibility: hidden; }
 }
+
+/* Benchmark panel (?bench) */
+.bench { position: absolute; z-index: 30; top: 76px; right: var(--edge); width: 260px; padding: 14px; }
+.bench dl { display: grid; gap: 6px; margin: 0 0 12px; }
+.bench dl div { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+.bench dt { color: var(--text-faint); }
+.bench dd { margin: 0; font-variant-numeric: tabular-nums; }
+.bench dd.good { color: var(--accent); } .bench dd.ok { color: #ecc25e; } .bench dd.poor { color: var(--danger); }
+.bench-hint { margin: 10px 0 0; font-size: 11px; color: var(--text-faint); line-height: 1.5; }
+@media (max-width: 767px) { .bench { top: 70px; left: 8px; right: 8px; width: auto; background: var(--panel-strong); } }

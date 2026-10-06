@@ -65,27 +65,41 @@ tests/                    Local server and Playwright checks
 
 ## Geometry pipeline
 
-`convert-anatomy.py` (BodyParts3D OBJ) → `optimize-anatomy.mjs` (simplify, into `work/optimised/`, gitignored)
-→ `build-streaming-assets.mjs` → `public/models/`:
+Source: the official BodyParts3D archive `isa_BP3D_4.0_obj_99.zip` (143 MB), extracted to
+`work/source/obj/` (gitignored), plus `scripts/data/parts.json` (names, FMA IDs, systems) and
+`scripts/data/concepts.json`. `node scripts/build-streaming-assets.mjs` (about 20 s) writes `public/models/`:
 
-- `manifest.json`: parts, files, quantisation grid. Small; fetched first and never cached forever.
-- `lod0.<hash>.bin.gz`: low-detail whole body (about 8% of triangles), shown first.
-- `<system>-<n>.<hash>.bin.gz`: full detail, split by system, at most about 220k triangles per file.
-- `concepts.<hash>.json`: named structures for search, loaded when the browser is idle.
+- Per mesh: weld split vertices → Taubin smoothing (2 iterations, reduced or skipped if volume would change > 3%)
+  → angle-weighted normals. This is **level 2 (full)**, the source resolution (6.68M triangles).
+- **Level 1 (standard)**: simplified to a 1.6M-triangle whole-body budget (1% error bound).
+- **Level 0 (low)**: about 120k triangles, one file, shown first on every device.
+- `manifest.json` (fetched first, never cached forever) and `concepts.<hash>.json` (search, loaded when idle).
 
-Each file is gzip(meshopt streams): uint16 positions + part index, octahedral normals, uint32 indices.
-Content hashes in names let the service worker cache them forever. To restore `work/optimised/` without the source
-archive, take `public/models/atlas.json` and `body-*.bin` from upstream commit `1c38bf3`.
+Each `.bin.gz` is gzip(meshopt streams): uint16 positions + part index, octahedral normals, uint32 indices. The part
+index is stored as `index + level * 16384`. Content hashes in names let the service worker cache files forever.
+Mesh clean-up lives in `scripts/lib/mesh-quality.mjs`, the OBJ reader in `scripts/lib/obj-source.mjs`.
+
+## Detail tiers (app/render/device-tier.ts, app/data/streamer.ts)
+
+- **full** (capable PCs): level 0, then level 2 for every visible system (about 22 MB).
+- **standard** (phones, tablets, Intel integrated graphics, < 8 GB memory): level 0, then level 1 (about 6.5 MB).
+  Level 2 is loaded only for the focused structure, or for parts near the centre of view when the camera is within
+  0.9 m, up to 1.2M triangles, and released afterwards.
+- Override with `?detail=full|standard` (remembered). `?bench` opens a panel with frame rate, triangles and a
+  tier switch, for measuring real devices.
 
 ## How rendering works
 
 - One draw call per geometry file. A `partIndex` vertex attribute indexes two small data textures:
-  `partState` (explode offset xyz, visible w) and `selectionState` (R selected, G full detail loaded).
-  Hidden parts, and low-detail copies of parts already loaded in full, are culled in the vertex shader.
+  `partState` (explode offset xyz, visible w) and `selectionState` (R selected, G best resident level × 85).
+  Hidden parts, and copies of parts with a better level resident, are culled in the vertex shader.
+- `app/render/residency.ts` tracks resident files, the best level per part and the matching pick mesh.
 - Picking: per-part geometries share the file's buffers and limit triangles with `drawRange`; ray tests run only
   against parts whose bounding box the ray hits.
-- Materials are cached per system and level of detail. Shaders are pre-compiled with `compileAsync` while the
-  low-detail body downloads.
+- `app/render/materials.ts`: one `MeshPhysicalMaterial` per system (per-system roughness, clearcoat, sheen and
+  procedural micro-relief, which is a shading effect only). Shaders are pre-compiled with `compileAsync`.
+- `app/render/post.ts`: MSAA scene target → HBAO (ambient occlusion, using a part-state normal material) → output.
+  Off on touch devices until the Phase 3 quality setting exists.
 - The canvas is transparent; the dark backdrop and grid are CSS.
 
 ## Coding conventions

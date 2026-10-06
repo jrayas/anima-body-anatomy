@@ -16,12 +16,16 @@ export function registerServiceWorker() {
 export function syncServiceWorkerCache(manifest: Manifest) {
   if (!import.meta.env.PROD || !('serviceWorker' in navigator)) return;
   const send = () => navigator.serviceWorker.ready.then(registration => {
-    // Built JS/CSS loaded by this page (hashed, so safe to cache forever).
-    const bundles = performance.getEntriesByType('resource').map(e => e.name)
-      .filter(u => u.startsWith(location.origin + assetUrl('assets/')));
+    // Files this page actually downloaded: built JS/CSS and the geometry for this device's tier.
+    // Only these are cached, so a phone never pulls full-resolution files it did not ask for.
+    const loaded = performance.getEntriesByType('resource').map(e => e.name)
+      .filter(u => u.startsWith(location.origin + assetUrl('assets/')) || u.startsWith(location.origin + assetUrl('models/')))
+      .filter(u => !u.endsWith('/manifest.json'));
     registration.active?.postMessage({
       type: 'sync',
-      keep: [...manifest.files.map(f => assetUrl(f.url)), assetUrl(manifest.concepts), ...bundles],
+      // Everything in the current build is kept; files from earlier deploys are pruned.
+      keep: [...manifest.files.map(f => assetUrl(f.url)), assetUrl(manifest.concepts)],
+      fetch: loaded,
       shell: [assetUrl(''), assetUrl('models/manifest.json')],
     });
   }).catch(() => {/* Caching is an enhancement; nothing to do. */});

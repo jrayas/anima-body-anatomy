@@ -11,8 +11,10 @@ part out and look up any of 3,432 named structures.
 ## Features
 
 - 2,234 separately selectable parts across 15 body systems, from the BodyParts3D reference anatomy.
-- Fast first view: a low-detail body appears in under a second on broadband, then full detail streams in,
+- Fast first view: a low-detail body appears in under a second on broadband, then detail streams in,
   system by system, only for the layers you are viewing.
+- Source-resolution geometry on capable computers; phones get a lighter version plus full detail for whatever
+  you focus on.
 - Works offline after the first visit (service worker cache).
 - Layers, guided starting points, search, focus on a single structure, and a "spread apart" view of every part.
 - Phone and desktop layouts.
@@ -61,16 +63,28 @@ The browser checks use Playwright's Chromium (`npx playwright install chromium` 
 
 ## How it works
 
-Geometry is split into one file per body system and compressed with meshoptimizer and gzip (12.6 MB in total,
-down from 33 MB). A small manifest lists the files; a low-detail copy of the whole body (0.8 MB) loads first.
-Each file is drawn in a single draw call, and small data textures control each part's position, visibility and
-selection on the GPU. See [CLAUDE.md](CLAUDE.md) for the file structure and conventions.
+The geometry is built directly from the official BodyParts3D archive at three detail levels, split by body system
+and compressed with meshoptimizer and gzip:
+
+| Level | Triangles | Download | Used by |
+|---|---|---|---|
+| Low | about 120k | 0.5 MB | every device, shown first |
+| Standard | about 1.6M | 6.2 MB | phones, tablets, laptops with integrated graphics |
+| Full (source resolution) | 6.68M | 22.4 MB | capable computers; phones load it only for the structure in focus or close to the camera |
+
+Add `?detail=full` or `?detail=standard` to the address to override the automatic choice, or `?bench` to show frame
+rate and triangle counts on your own device. Each file is drawn in a single draw call, and small data textures
+control each part's position, visibility, selection and detail level on the GPU. See [CLAUDE.md](CLAUDE.md) for the
+file structure and conventions.
 
 ## Rebuilding the geometry
 
-Optional. The repository already includes the browser-ready files in `public/models/`. To rebuild from the official
-BodyParts3D archive, run `scripts/convert-anatomy.py`, then `node scripts/optimize-anatomy.mjs`, then
-`node scripts/build-streaming-assets.mjs`.
+Optional. The repository already includes the browser-ready files in `public/models/`. To rebuild:
+
+1. Download `isa_BP3D_4.0_obj_99.zip` (143 MB) from the
+   [BodyParts3D download page](https://dbarchive.biosciencedbc.jp/en/bodyparts3d/download.html).
+2. Extract it so the OBJ files are in `work/source/obj/isa_BP3D_4.0_obj_99/`.
+3. Run `node scripts/build-streaming-assets.mjs`, then `node scripts/validate-atlas.mjs`.
 
 ## Credits and licences
 

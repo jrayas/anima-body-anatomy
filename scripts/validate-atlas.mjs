@@ -1,7 +1,7 @@
 // Validates the streaming geometry in public/models against its manifest:
 // every file decodes, hashes match file names, indices are in range, every vertex's
-// partIndex belongs to its part range, and every part appears once in the low-detail
-// body and exactly once in full detail.
+// partIndex (index + level * levelOffset) belongs to its part range, and every part appears
+// exactly once at each detail level (0 low, 1 standard, 2 full).
 // Usage: node scripts/validate-atlas.mjs
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -15,7 +15,7 @@ const read = url => fs.readFileSync(new URL(url.replace(/^models\//, ''), base))
 const manifest = JSON.parse(read('models/manifest.json'));
 const concepts = JSON.parse(read(manifest.concepts));
 
-assert.equal(manifest.format, 2);
+assert.equal(manifest.format, 3);
 assert.equal(manifest.parts.length, 2234);
 assert.equal(concepts.length, 3432);
 const ids = new Set(manifest.parts.map(p => p.id));
@@ -29,8 +29,8 @@ for (const c of concepts) {
   for (const id of c.elements) assert.ok(ids.has(id), `${c.id}: missing ${id}`);
 }
 
-const seen = [new Map(), new Map()];
-const triangles = [0, 0];
+const seen = [new Map(), new Map(), new Map()];
+const triangles = [0, 0, 0];
 for (const file of manifest.files) {
   const gz = read(file.url);
   assert.equal(gz.length, file.bytes, `${file.url}: size`);
@@ -48,17 +48,18 @@ for (const file of manifest.files) {
     assert.ok(count >= 3 && count % 3 === 0, `${file.url}: part ${partIndex} empty`);
     for (let i = start; i < start + count; i++) {
       assert.ok(indices[i] < file.vertexCount, `${file.url}: index out of range`);
-      assert.equal(q[indices[i] * 4 + 3], partIndex, `${file.url}: vertex belongs to another part`);
+      assert.equal(q[indices[i] * 4 + 3], partIndex + file.level * manifest.levelOffset, `${file.url}: vertex belongs to another part`);
     }
-    const map = seen[file.lod];
-    assert.ok(!map.has(partIndex), `part ${partIndex} appears twice at lod ${file.lod}`);
+    const map = seen[file.level];
+    assert.ok(!map.has(partIndex), `part ${partIndex} appears twice at lod ${file.level}`);
     map.set(partIndex, file.url);
-    triangles[file.lod] += count / 3;
+    triangles[file.level] += count / 3;
   }
-  if (file.lod === 1) assert.ok(file.parts.every(([i]) => manifest.parts[i].system === file.system), `${file.url}: wrong system`);
+  if (file.level > 0) assert.ok(file.parts.every(([i]) => manifest.parts[i].system === file.system), `${file.url}: wrong system`);
 }
-for (const lod of [0, 1]) assert.equal(seen[lod].size, manifest.parts.length, `lod ${lod} is missing parts`);
-assert.equal(triangles[0], manifest.triangles.lod0);
-assert.equal(triangles[1], manifest.triangles.full);
-console.log(`Verified ${manifest.files.length} files, ${ids.size} parts at both levels of detail, ${concepts.length} concepts, ` +
-  `${triangles[1].toLocaleString()} full-detail and ${triangles[0].toLocaleString()} low-detail triangles.`);
+for (const level of [0, 1, 2]) {
+  assert.equal(seen[level].size, manifest.parts.length, `level ${level} is missing parts`);
+  assert.equal(triangles[level], manifest.levels[level].triangles);
+}
+console.log(`Verified ${manifest.files.length} files, ${ids.size} parts at three detail levels, ${concepts.length} concepts; ` +
+  `triangles per level: ${triangles.map(t => t.toLocaleString('en-GB')).join(' / ')}.`);
