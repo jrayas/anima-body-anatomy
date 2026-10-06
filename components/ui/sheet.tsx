@@ -41,14 +41,17 @@ function SheetContent({
   children,
   side = 'right',
   showCloseButton = true,
+  overlay = true,
   ...props
 }: SheetPrimitive.Popup.Props & {
   side?: 'top' | 'right' | 'bottom' | 'left';
   showCloseButton?: boolean;
+  /** Set false for non-modal sheets that should leave the page undimmed. */
+  overlay?: boolean;
 }) {
   return (
     <SheetPortal>
-      <SheetOverlay />
+      {overlay && <SheetOverlay />}
       <SheetPrimitive.Popup
         data-slot="sheet-content"
         data-side={side}

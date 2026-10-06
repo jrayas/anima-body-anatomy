@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import {MeshoptSimplifier} from 'meshoptimizer';
 await MeshoptSimplifier.ready;
 const name=process.argv[2]??'atlas.json',prefix=name.includes('female')?'female':'body';
-const dir=new URL('../public/models/',import.meta.url),manifest=JSON.parse(fs.readFileSync(new URL(name,dir),'utf8'));
+// Intermediate output; build-streaming-assets.mjs turns it into the files in public/models.
+const dir=new URL('../work/optimised/',import.meta.url),manifest=JSON.parse(fs.readFileSync(new URL(name,dir),'utf8'));
 const originals=manifest.chunks.map(c=>c.url.split('/').pop());
 if(manifest.optimized)throw new Error('Already optimized. Re-run the source converter first.');
 const source=manifest.chunks.map(c=>fs.readFileSync(new URL(c.url.split('/').pop(),dir)));

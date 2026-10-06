@@ -37,3 +37,8 @@ next-env.d.ts
 /outputs/
 /work/
 *.tsbuildinfo
+
+# test output
+/tests/screenshots/
+/test-results/
+/tests/lighthouse/

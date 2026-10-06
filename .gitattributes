@@ -1,0 +1,4 @@
+# Generated geometry must stay byte-identical (file names contain content hashes).
+*.bin binary
+*.gz binary
+public/models/*.json -text

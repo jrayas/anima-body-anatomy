@@ -8,7 +8,7 @@ from pathlib import Path
 from array import array
 root=Path(__file__).resolve().parents[1]
 source=Path(sys.argv[1]); metadata=json.loads(Path(sys.argv[2]).read_text()); systemdata=json.loads(Path(sys.argv[3]).read_text()) if len(sys.argv)>3 else {}
-out=root/'public/models';out.mkdir(parents=True,exist_ok=True)
+out=root/'work/optimised';out.mkdir(parents=True,exist_ok=True)
 # Accept the research map's element records or a direct id -> system mapping.
 systems=systemdata.get('systems',systemdata.get('mapping',systemdata.get('elements',systemdata.get('meshes',systemdata))))
 if isinstance(systems,list): systems={x['id']:x for x in systems}

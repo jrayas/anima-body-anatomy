@@ -1,64 +1,82 @@
-# Human Atlas
+# Anima: Human Anatomy
 
-An interactive 3D anatomy explorer built with React, Three.js, and shadcn/ui. Take the BodyParts3D adult male reference apart into **2,234 individually selectable meshes**, explore **15 anatomical systems**, and search **3,432 named concepts**.
+An educational 3D model of the human body that runs in your browser. Turn it around, peel away layers, spread every
+part out and look up any of 3,432 named structures.
 
-**[Explore the live demo](https://human-atlas-seven.vercel.app)**
+**Live site:** https://jrayas.github.io/anima-body-anatomy/
 
-## Explore
+> Anima is for learning. It is an educational model, **not medical advice**, and must not be used for diagnosis or
+> treatment.
 
-- Orbit, zoom, and select structures directly on the body.
-- Toggle individual systems or use skeleton and organ presets.
-- Move from assembled anatomy to a spaced inventory of every visible piece.
-- Search anatomical names and source identifiers.
-- Isolate a selected structure and read its details.
-- Use compact controls and detail panels on mobile.
+## Features
+
+- 2,234 separately selectable parts across 15 body systems, from the BodyParts3D reference anatomy.
+- Fast first view: a low-detail body appears in under a second on broadband, then full detail streams in,
+  system by system, only for the layers you are viewing.
+- Works offline after the first visit (service worker cache).
+- Layers, guided starting points, search, focus on a single structure, and a "spread apart" view of every part.
+- Phone and desktop layouts.
 
 ## Run locally
 
-Requires Node.js 22.13 or newer. No API keys or accounts are needed.
+Requires Node.js 22.13 or newer.
 
 ```sh
 npm ci
 npm run dev
 ```
 
-Open http://localhost:3016. To build the static site, run `npm run build`; the output is in `dist/`.
+Open http://localhost:3016/anima-body-anatomy/.
 
-## Validate
+To test the production build the way GitHub Pages serves it:
 
 ```sh
-npm run check
-node scripts/validate-atlas.mjs
-node scripts/validate-interactions.mjs
 npm run build
+node tests/serve.mjs
 ```
 
-Validation covers mesh buffers, names and concept membership, nonoverlapping exploded layouts at desktop and mobile aspect ratios, search and inspection contracts, and tap-versus-drag handling. Browser interaction checks have exercised selection, system controls, search, isolation, rotation, and 390×844, 320×568, and 844×390 layouts. Phone controls stay clear of the exploded inventory, and isolated structures fit the space above or beside the detail panel. Physical-device performance and real multitouch hardware have not been tested.
+Then open http://localhost:4173/anima-body-anatomy/.
 
-## Anatomy data
+## Deploy to GitHub Pages
 
-The current viewer uses **BodyParts3D 4.0**, an adult male reference anatomy, licensed **CC BY 4.0**. It does not represent every human structure or variation. Individual source meshes are distinct from named concepts, which may group multiple meshes. Descriptions distinguish general system context from individual organ explanations.
+1. Fork or push this repository to GitHub.
+2. In the repository, open **Settings → Pages** and set **Source** to **GitHub Actions**.
+3. Push to `main`. The workflow in `.github/workflows/deploy.yml` type-checks, validates the geometry, builds with
+   the base path `/<repository-name>/` and publishes the site to `https://<user>.github.io/<repository-name>/`.
 
-Geometry is simplified for browser performance while retaining every source mesh. The packaged model contains 2,288,268 triangles and downloads approximately 33 MB of compressed geometry. Full credits, source links, and adaptation details are in [ATTRIBUTION.md](public/ATTRIBUTION.md).
+To host at the root of a domain instead, build with `BASE_PATH=/ npm run build`.
 
-This is an educational explorer, not a diagnostic or surgical tool.
+## Checks
+
+```sh
+npm run check                         # TypeScript
+node scripts/validate-atlas.mjs       # decode and verify every geometry file
+node scripts/validate-interactions.mjs
+node tests/smoke.mjs http://localhost:4173/anima-body-anatomy/   # screenshots and console errors
+node tests/measure-load.mjs http://localhost:4173/anima-body-anatomy/
+node tests/offline-cache.mjs http://localhost:4173/anima-body-anatomy/
+```
+
+The browser checks use Playwright's Chromium (`npx playwright install chromium` if it is missing).
 
 ## How it works
 
-Geometry is merged into batches. Per-structure GPU textures control translation, visibility, and selection, while component geometry supports accurate picking. Exploded layouts pack only the visible pieces. Rendering updates when the scene changes; orbit controls remain responsive without thousands of separate draw calls.
+Geometry is split into one file per body system and compressed with meshoptimizer and gzip (12.6 MB in total,
+down from 33 MB). A small manifest lists the files; a low-detail copy of the whole body (0.8 MB) loads first.
+Each file is drawn in a single draw call, and small data textures control each part's position, visibility and
+selection on the GPU. See [CLAUDE.md](CLAUDE.md) for the file structure and conventions.
 
-The optional WebMCP tools expose anatomy search and inspection in compatible browsers. The visible interface works without them.
+## Rebuilding the geometry
 
-## Rebuilding geometry
+Optional. The repository already includes the browser-ready files in `public/models/`. To rebuild from the official
+BodyParts3D archive, run `scripts/convert-anatomy.py`, then `node scripts/optimize-anatomy.mjs`, then
+`node scripts/build-streaming-assets.mjs`.
 
-The repository includes browser-ready geometry. Rebuilding it is optional: obtain the official BodyParts3D OBJ archive and English metadata tables, prepare the joined concepts and display-system mappings, run `scripts/convert-anatomy.py`, then `node scripts/optimize-anatomy.mjs` and `node scripts/compress-models.mjs`. Simplification uses a 0.2% relative error limit per structure.
+## Credits and licences
 
-## Deploy
-
-Import this repository into Vercel as a Vite project. The included `vercel.json` configures `npm ci`, `npm run build`, and the `dist` output directory. It can also be served by a static host.
-
-## License
-
-Original application code is released under the [MIT License](LICENSE). **The anatomy data has its own CC BY 4.0 license**; preserve the attribution when redistributing it. Third-party dependencies retain their respective licenses.
-
-Issues and pull requests are welcome. Please include reproduction steps and browser/device details for interaction problems.
+- Application code: MIT ([LICENSE](LICENSE)). Anima is a fork of
+  [Human Atlas](https://github.com/ashemag/human-atlas) by ashemag.
+- Anatomy data: **BodyParts3D, © The Database Center for Life Science, CC BY 4.0**. Keep this attribution when
+  redistributing. Full details and adaptations are in [ATTRIBUTION.md](ATTRIBUTION.md).
+- The model is one adult male reference body. It does not include every structure or the natural variation
+  between people.
